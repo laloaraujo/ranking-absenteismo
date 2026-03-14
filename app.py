@@ -14,8 +14,8 @@ warnings.filterwarnings("ignore")
 
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="Análise ML · Afastamentos",
-    page_icon="⬜",
+    page_title="Score de Risco de Absenteísmo",
+    page_icon="⚠️",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -314,7 +314,7 @@ grupo_predominante = (
 features = features.merge(grupo_predominante, on="MAT", how="left")
 
 # ── Tabs ──────────────────────────────────────────────────────────────────────
-tab1, tab2, tab3 = st.tabs(["📋 Ranking de Risco", "🔬 Análise por CID", "📊 Importância das Features"])
+tab1, tab2, tab3 = st.tabs(["Ranking de Risco", "Análise por CID", "Importância das Features"])
 
 # ─────────────────────────────────────────────────────────────────────────────
 with tab1:
