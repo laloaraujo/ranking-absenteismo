@@ -390,7 +390,7 @@ with col_btn:
                 "Execute no terminal: `pip install weasyprint`"
             )
         else:
-            nome = f"ranking_absenteismo_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf"
+            nome = f"score_absenteismo_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf"
             st.download_button(
                 label="⬇️ Baixar PDF",
                 data=pdf_bytes,
