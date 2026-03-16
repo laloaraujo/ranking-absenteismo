@@ -153,7 +153,7 @@ df = df.sort_values(["MAT", "DATA"])
 # Normalizar CID (uppercase, sem espaços)
 df["CID"] = df["CID"].astype(str).str.strip().str.upper()
 
-hoje = df["DATA"].max()
+hoje = pd.Timestamp.today()
 
 # ── Enriquecer com info de CID ────────────────────────────────────────────────
 df[["grupo_cid", "peso_cid"]] = df["CID"].apply(
