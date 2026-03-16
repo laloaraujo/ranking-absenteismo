@@ -370,7 +370,7 @@ with tab1:
     st.dataframe(
         ranking.style
             .background_gradient(subset=["Score de risco"], cmap="RdYlGn_r")
-            .format({"Score de risco": "{:.3f}"}),  # ← adicione esta linha
+            .format({"Score de risco": "{:.2f}"}),  # ← adicione esta linha
         use_container_width=True,
         height=min((len(ranking) + 1) * 35 + 3, 600)
 )
