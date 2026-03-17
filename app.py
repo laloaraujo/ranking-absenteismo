@@ -316,7 +316,7 @@ altura_tabela = (len(ranking) + 1) * 35 + 10
 st.dataframe(
     ranking.style
         .background_gradient(subset=["Score"], cmap="RdYlGn_r")
-        .format({"Score": "{:.1f}", "Previstos (90d)": "{:.1f}"}),
+        .format({"Score": "{:.1f}", "Previstos (90d)": "{:.1f}", "Peso CID": "{:.2f}"})
     use_container_width=True,
     height=altura_tabela,
 )
