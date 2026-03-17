@@ -14,7 +14,7 @@ warnings.filterwarnings("ignore")
 
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="Score de Absenteísmo XGBoost",
+    page_title="Score de Risco de Absenteísmo",
     page_icon="⚠️",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -367,38 +367,6 @@ def gerar_pdf(df_ranking: pd.DataFrame) -> bytes | None:
             {linhas_html}
         </tbody>
     </table>
-    <p class="footer">Jorge Eduardo de Araujo Oliveira — Análise ML · Afastamentos</p>
+    <p class="footer">Jorge Eduardo de Araujo Oliveira — Score de Risco de Absenteísmo</p>
 </body>
 </html>"""
-
-    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
-        HTML(string=html).write_pdf(f.name)
-        pdf_bytes = open(f.name, "rb").read()
-    os.unlink(f.name)
-    return pdf_bytes
-
-
-col_btn, col_info = st.columns([1, 5])
-with col_btn:
-    if st.button("📄 Exportar PDF", use_container_width=True):
-        with st.spinner("Gerando PDF..."):
-            pdf_bytes = gerar_pdf(ranking)
-
-        if pdf_bytes is None:
-            st.error(
-                "Biblioteca `weasyprint` não instalada.\n\n"
-                "Execute no terminal: `pip install weasyprint`"
-            )
-        else:
-            nome = f"score_absenteismo_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf"
-            st.download_button(
-                label="⬇️ Baixar PDF",
-                data=pdf_bytes,
-                file_name=nome,
-                mime="application/pdf",
-                use_container_width=True,
-            )
-with col_info:
-    st.caption(
-        "PDF gerado em A4 paisagem com todos os empregados, colorido por nível de risco. "
-    )
