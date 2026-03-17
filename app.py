@@ -14,7 +14,7 @@ warnings.filterwarnings("ignore")
 
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="Análise ML · Afastamentos",
+    page_title="Score de Absenteísmo XGBoost",
     page_icon="⚠️",
     layout="wide",
     initial_sidebar_state="expanded"
