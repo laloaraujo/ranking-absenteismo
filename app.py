@@ -332,7 +332,7 @@ def gerar_pdf_visual(df_ranking):
     df_ranking["Previstos (90d)"] = df_ranking["Previstos (90d)"].apply(lambda x: f"{x:.2f}")
     
     # Título
-    elements.append(Paragraph("Score de Risco de Absenteísmo — Próximos 90 dias", styles['Title']))
+    elements.append(Paragraph("Score de Risco de Absenteismo - Proximos 90 dias", styles['Title']))
     elements.append(Spacer(1, 12))
     
     # Preparar dados da tabela
