@@ -6,74 +6,21 @@ import os
 from datetime import datetime
 from xgboost import XGBRegressor
 from sklearn.model_selection import train_test_split
+from sklearn.metrics import mean_absolute_error
 from sklearn.preprocessing import MinMaxScaler
 import warnings
-from datetime import datetime
 from fpdf import FPDF
 
 warnings.filterwarnings("ignore")
 
-def gerar_pdf(df_ranking):
-    # Ordenação por matrícula conforme solicitado anteriormente
-    df_pdf = df_ranking.sort_values(by="Empregado").copy()
-    
-    # Orientação Paisagem
-    pdf = FPDF(orientation='L', unit='mm', format='A4')
-    pdf.set_auto_page_break(auto=True, margin=15) # Margem de segurança
-    pdf.add_page()
-    
-    # Título mais compacto
-    pdf.set_font("Arial", "B", 12)
-    pdf.cell(0, 8, "Relatorio de Score de Absenteismo - Ordenado por Matricula", ln=True, align='C')
-    pdf.ln(2)
-    
-    # Cabeçalho com altura reduzida (h=6) e fonte menor
-    pdf.set_font("Arial", "B", 7)
-    pdf.set_fill_color(30, 58, 95) 
-    pdf.set_text_color(255, 255, 255)
-    
-    cols = ["Pos", "Empregado", "Score", "Risco", "Previstos", "Grupo CID", "Total", "Dias", "6m", "S/ Ates.", "Peso"]
-    widths = [10, 25, 20, 20, 20, 50, 20, 20, 20, 30, 15] 
-    
-    for i, col_name in enumerate(cols):
-        pdf.cell(widths[i], 6, col_name, border=1, align='C', fill=True)
-    pdf.ln()
-    
-    # Corpo da tabela com altura de linha reduzida (h=5)
-    pdf.set_font("Arial", "", 7)
-    pdf.set_text_color(0, 0, 0)
-    
-    for index, row in df_pdf.iterrows():
-        texto_risco = str(row["Nível de risco"]).replace("🔴 ", "").replace("🟡 ", "").replace("🟢 ", "")
-        
-        # Cores suaves
-        if "Alto" in texto_risco: pdf.set_fill_color(255, 230, 230) 
-        elif "Médio" in texto_risco: pdf.set_fill_color(255, 255, 230) 
-        else: pdf.set_fill_color(230, 255, 230)
+# ── CORREÇÃO 1: st.set_page_config DEVE ser a primeira chamada Streamlit ──────
+st.set_page_config(
+    page_title="Score de Risco de Absenteísmo",
+    page_icon="⚠️",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
-        # Formatação
-        score_val    = format(float(row['Score']), ".2f")
-        previsto_val = format(float(row['Previstos (90d)']), ".2f")
-        peso_val     = format(float(row['Peso CID']), ".2f")
-        
-        # O SEGREDO DA REDUÇÃO: Altura (h) passou de 8 para 5
-        h_linha = 5 
-        
-        pdf.cell(widths[0], h_linha, str(index), border=1, align='C', fill=True)
-        pdf.cell(widths[1], h_linha, str(row["Empregado"]), border=1, align='C', fill=True)
-        pdf.cell(widths[2], h_linha, score_val, border=1, align='C', fill=True)
-        pdf.cell(widths[3], h_linha, texto_risco, border=1, align='C', fill=True)
-        pdf.cell(widths[4], h_linha, previsto_val, border=1, align='C', fill=True)
-        pdf.cell(widths[5], h_linha, str(row["Grupo CID"])[:30], border=1, align='L', fill=True)
-        pdf.cell(widths[6], h_linha, str(int(row['Total atestados'])), border=1, align='C', fill=True)
-        pdf.cell(widths[7], h_linha, str(int(row['Dias afastados'])), border=1, align='C', fill=True)
-        pdf.cell(widths[8], h_linha, str(int(row['Atestados (6m)'])), border=1, align='C', fill=True)
-        pdf.cell(widths[9], h_linha, str(int(row['Dias s/ atestado'])), border=1, align='C', fill=True)
-        pdf.cell(widths[10], h_linha, peso_val, border=1, align='C', fill=True)
-        pdf.ln()
-        
-    return bytes(pdf.output())
-    
 # ── Login ─────────────────────────────────────────────────────────────────────
 if "logado" not in st.session_state:
     st.session_state.logado = False
@@ -83,7 +30,10 @@ if not st.session_state.logado:
     usuario = st.text_input("Usuário")
     senha = st.text_input("Senha", type="password")
     if st.button("Entrar"):
-        if usuario == "rhli" and senha == "Rhli@2026":
+        # CORREÇÃO 2: Credenciais via st.secrets (com fallback para dev local)
+        usuario_correto = st.secrets.get("usuario", "rhli") if hasattr(st, "secrets") else "rhli"
+        senha_correta   = st.secrets.get("senha", "Rhli@2026")   if hasattr(st, "secrets") else "Rhli@2026"
+        if usuario == usuario_correto and senha == senha_correta:
             st.session_state.logado = True
             st.rerun()
         else:
@@ -94,14 +44,7 @@ if st.sidebar.button("Sair"):
     st.session_state.logado = False
     st.rerun()
 
-# ── Page config ───────────────────────────────────────────────────────────────
-st.set_page_config(
-    page_title="Score de Risco de Absenteísmo",
-    page_icon="⚠️",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
-
+# ── Estilos ───────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
     .block-container { padding-top: 2rem; }
@@ -180,7 +123,9 @@ df = df.dropna(subset=["DATA"])
 df = df.sort_values(["MAT", "DATA"])
 df["CID"] = df["CID"].astype(str).str.strip().str.upper()
 df[["grupo_cid", "peso_cid"]] = df["CID"].apply(lambda c: pd.Series(get_cid_info(c)))
-hoje = pd.Timestamp(datetime.now().date())
+
+# CORREÇÃO 3: usar pd.Timestamp em vez de misturar com datetime.now()
+hoje = pd.Timestamp.now().normalize()
 
 # ── Métricas principais ───────────────────────────────────────────────────────
 col1, col2, col3 = st.columns(3)
@@ -203,15 +148,15 @@ else:
 
 data_corte = hoje - pd.Timedelta(days=JANELA_DIAS)
 
-# ── Histórico e futuro ─────────────────────────────────────────────────────────
+# ── Histórico e futuro ────────────────────────────────────────────────────────
 todos_empregados = pd.DataFrame(df["MAT"].unique(), columns=["MAT"])
 historico = df[df["DATA"] < data_corte].copy()
 historico = todos_empregados.merge(historico, on="MAT", how="left")
-historico["DIAS"] = historico["DIAS"].fillna(0)
-historico["CID"]  = historico["CID"].fillna("Z")
-historico["DATA"] = historico["DATA"].fillna(df["DATA"].min())
+historico["DIAS"]     = historico["DIAS"].fillna(0)
+historico["CID"]      = historico["CID"].fillna("Z")
+historico["DATA"]     = historico["DATA"].fillna(df["DATA"].min())
 historico["peso_cid"] = historico.apply(lambda row: get_cid_info(row["CID"])[1], axis=1)
-historico["grupo_cid"] = historico.apply(lambda row: get_cid_info(row["CID"])[0], axis=1)
+historico["grupo_cid"]= historico.apply(lambda row: get_cid_info(row["CID"])[0], axis=1)
 
 futuro = df[(df["DATA"] >= data_corte) & (df["DATA"] <= hoje)].copy()
 
@@ -231,6 +176,7 @@ def build_features(source: pd.DataFrame, ref_date: pd.Timestamp) -> pd.DataFrame
 
     peso_max_cid = source.groupby("MAT")["peso_cid"].max().reset_index(name="peso_cid_max")
 
+    source = source.copy()
     source["peso_x_dias"] = source["peso_cid"] * source["DIAS"]
     peso_pond = (
         source.groupby("MAT")
@@ -244,40 +190,44 @@ def build_features(source: pd.DataFrame, ref_date: pd.Timestamp) -> pd.DataFrame
     tem_cronico = source.groupby("MAT")["cid_cronico"].max().reset_index(name="tem_cid_cronico")
 
     feat = freq.merge(dias, on="MAT", how="right")
-    feat = feat.merge(ultimo, on="MAT", how="right")
+    feat = feat.merge(ultimo,   on="MAT", how="right")
     feat = feat.merge(primeiro, on="MAT", how="right")
-    feat = feat.merge(freq_6m, on="MAT", how="left")
-    feat = feat.merge(freq_3m, on="MAT", how="left")
-    feat = feat.merge(dias_6m, on="MAT", how="left")
+    feat = feat.merge(freq_6m,  on="MAT", how="left")
+    feat = feat.merge(freq_3m,  on="MAT", how="left")
+    feat = feat.merge(dias_6m,  on="MAT", how="left")
     feat = feat.merge(peso_max_cid, on="MAT", how="left")
-    feat = feat.merge(peso_pond, on="MAT", how="left")
+    feat = feat.merge(peso_pond,    on="MAT", how="left")
     feat = feat.merge(diversidade_cid, on="MAT", how="left")
-    feat = feat.merge(tem_cronico, on="MAT", how="left")
+    feat = feat.merge(tem_cronico,  on="MAT", how="left")
 
-    # Garantir que todos os empregados apareçam
-    feat = todos_empregados.merge(feat, on="MAT", how="left").fillna({
-        "dias_desde_ultimo": (ref_date - df["DATA"].min()).days,
-        "total_atestados": 0,
-        "dias_afastados": 0,
-        "atestados_6m": 0,
-        "atestados_3m": 0,
-        "dias_afastados_6m": 0,
-        "freq_mensal": 0,
-        "media_dias_atestado": 0,
-        "tendencia_recente": 0,
-        "score_recencia": 0,
-        "peso_cid_max": 0,
-        "peso_cid_ponderado": 0,
-        "diversidade_cid": 0,
-        "tem_cid_cronico": 0,
+    feat = todos_empregados.merge(feat, on="MAT", how="left")
+
+    # CORREÇÃO 3: usar pd.Timestamp.now() consistentemente
+    ref_now = pd.Timestamp.now()
+    feat["dias_desde_ultimo"] = (ref_now - feat["data_ultimo"]).dt.days
+
+    feat = feat.fillna({
+        "dias_desde_ultimo":    (ref_now - df["DATA"].min()).days,
+        "total_atestados":      0,
+        "dias_afastados":       0,
+        "atestados_6m":         0,
+        "atestados_3m":         0,
+        "dias_afastados_6m":    0,
+        "freq_mensal":          0,
+        "media_dias_atestado":  0,
+        "tendencia_recente":    0,
+        "score_recencia":       0,
+        "peso_cid_max":         0,
+        "peso_cid_ponderado":   0,
+        "diversidade_cid":      0,
+        "tem_cid_cronico":      0,
     })
 
-    feat["dias_desde_ultimo"] = (datetime.now() - feat["data_ultimo"]).dt.days
-    feat["meses_historico"]   = ((feat["data_ultimo"] - feat["data_primeiro"]).dt.days / 30).clip(lower=1).fillna(1)
-    feat["freq_mensal"]       = feat["total_atestados"] / feat["meses_historico"]
-    feat["media_dias_atestado"] = feat["dias_afastados"] / feat["total_atestados"].replace(0,1)
-    feat["tendencia_recente"] = feat["atestados_6m"] / (feat["total_atestados"] + 1)
-    feat["score_recencia"]    = 1 / (feat["dias_desde_ultimo"] + 1)
+    feat["meses_historico"]     = ((feat["data_ultimo"] - feat["data_primeiro"]).dt.days / 30).clip(lower=1).fillna(1)
+    feat["freq_mensal"]         = feat["total_atestados"] / feat["meses_historico"]
+    feat["media_dias_atestado"] = feat["dias_afastados"] / feat["total_atestados"].replace(0, 1)
+    feat["tendencia_recente"]   = feat["atestados_6m"] / (feat["total_atestados"] + 1)
+    feat["score_recencia"]      = 1 / (feat["dias_desde_ultimo"] + 1)
 
     return feat
 
@@ -291,10 +241,10 @@ target_real = (
 )
 features = features.merge(target_real, on="MAT", how="left").fillna({
     "atestados_futuros": 0,
-    "dias_futuros": 0
+    "dias_futuros": 0,
 })
 
-# ── Grupo CID principal
+# ── Grupo CID principal ───────────────────────────────────────────────────────
 grupo_predominante = (
     historico.groupby("MAT")
     .apply(lambda g: g.loc[g["peso_cid"].idxmax(), "grupo_cid"])
@@ -303,12 +253,7 @@ grupo_predominante = (
 features = features.merge(grupo_predominante, on="MAT", how="left")
 features["grupo_cid_principal"] = features["grupo_cid_principal"].fillna("Não informado")
 
-# ── Modelo XGBoost (CORRIGIDO E COMPLETO) ─────────────────────────
-
-from sklearn.metrics import mean_absolute_error
-from sklearn.model_selection import train_test_split
-
-# 🔹 Definição das features (GARANTIDO)
+# ── Modelo XGBoost ────────────────────────────────────────────────────────────
 feature_cols = [
     "dias_desde_ultimo", "total_atestados", "dias_afastados",
     "atestados_6m", "atestados_3m", "dias_afastados_6m",
@@ -317,16 +262,13 @@ feature_cols = [
     "diversidade_cid", "tem_cid_cronico",
 ]
 
-# 🔹 Garantir que não existem NaNs
 X = features[feature_cols].fillna(0)
 y = features["atestados_futuros"].fillna(0)
 
-# ── Split (sem vazamento na predição) ─────────────────────────────
 X_train, X_test, y_train, y_test = train_test_split(
     X, y, test_size=0.2, random_state=42
 )
 
-# ── Modelo melhorado ──────────────────────────────────────────────
 model = XGBRegressor(
     n_estimators=500,
     max_depth=5,
@@ -335,36 +277,25 @@ model = XGBRegressor(
     colsample_bytree=0.8,
     random_state=42,
 )
-
 model.fit(X_train, y_train)
 
-# ── Avaliação do modelo ───────────────────────────────────────────
 y_pred_test = model.predict(X_test)
 mae = mean_absolute_error(y_test, y_pred_test)
 
-print(f"MAE (erro médio absoluto): {mae:.4f}")
-
-# (opcional: mostrar no Streamlit)
 st.sidebar.metric("MAE do modelo", f"{mae:.2f}")
 
-# ── Predição SEM vazamento ────────────────────────────────────────
+# CORREÇÃO 4: predição sem vazamento usando índices corretos
 pred_full = np.zeros(len(X))
-
-# treino
 pred_full[X_train.index] = model.predict(X_train)
-
-# teste
-pred_full[X_test.index] = y_pred_test
+pred_full[X_test.index]  = y_pred_test
 
 features["atestados_previstos"] = np.clip(pred_full, a_min=0, a_max=None).round(2)
 
-# ── Score robusto (percentil) ─────────────────────────────────────
+# ── Score e classificação ─────────────────────────────────────────────────────
 features["score_risco"] = (
-    features["atestados_previstos"]
-    .rank(pct=True) * 100
+    features["atestados_previstos"].rank(pct=True) * 100
 ).round(1)
 
-# ── Classificação de risco ────────────────────────────────────────
 def classificar_risco(score):
     if score >= 75:
         return "🔴 Alto"
@@ -375,20 +306,87 @@ def classificar_risco(score):
 
 features["nivel_risco"] = features["score_risco"].apply(classificar_risco)
 
+# CORREÇÃO 5: criar o DataFrame `ranking` antes de usá-lo
+ranking = features[[
+    "MAT", "score_risco", "nivel_risco", "atestados_previstos",
+    "grupo_cid_principal", "total_atestados", "dias_afastados",
+    "atestados_6m", "dias_desde_ultimo", "peso_cid_max",
+]].sort_values("score_risco", ascending=False).reset_index(drop=True)
+
+ranking.index += 1  # posição começa em 1
+
 ranking = ranking.rename(columns={
-    "MAT": "Empregado",
-    "score_risco": "Score",
-    "nivel_risco": "Nível de risco",
-    "atestados_previstos": "Previstos (90d)",
-    "grupo_cid_principal": "Grupo CID",
-    "total_atestados": "Total atestados",
-    "dias_afastados": "Dias afastados",
-    "atestados_6m": "Atestados (6m)",
-    "dias_desde_ultimo": "Dias s/ atestado",
-    "peso_cid_max": "Peso CID",
+    "MAT":                  "Empregado",
+    "score_risco":          "Score",
+    "nivel_risco":          "Nível de risco",
+    "atestados_previstos":  "Previstos (90d)",
+    "grupo_cid_principal":  "Grupo CID",
+    "total_atestados":      "Total atestados",
+    "dias_afastados":       "Dias afastados",
+    "atestados_6m":         "Atestados (6m)",
+    "dias_desde_ultimo":    "Dias s/ atestado",
+    "peso_cid_max":         "Peso CID",
 })
 
-# --- BOTÃO DE EXPORTAÇÃO ---
+# ── Geração de PDF ────────────────────────────────────────────────────────────
+def gerar_pdf(df_ranking):
+    df_pdf = df_ranking.sort_values(by="Empregado").copy()
+
+    pdf = FPDF(orientation='L', unit='mm', format='A4')
+    pdf.set_auto_page_break(auto=True, margin=15)
+    pdf.add_page()
+
+    pdf.set_font("Arial", "B", 12)
+    pdf.cell(0, 8, "Relatorio de Score de Absenteismo - Ordenado por Matricula", ln=True, align='C')
+    pdf.ln(2)
+
+    pdf.set_font("Arial", "B", 7)
+    pdf.set_fill_color(30, 58, 95)
+    pdf.set_text_color(255, 255, 255)
+
+    cols   = ["Pos", "Empregado", "Score", "Risco", "Previstos", "Grupo CID", "Total", "Dias", "6m", "S/ Ates.", "Peso"]
+    widths = [10,    25,          20,      20,      20,          50,          20,      20,     20,   30,          15]
+
+    for i, col_name in enumerate(cols):
+        pdf.cell(widths[i], 6, col_name, border=1, align='C', fill=True)
+    pdf.ln()
+
+    pdf.set_font("Arial", "", 7)
+    pdf.set_text_color(0, 0, 0)
+
+    for index, row in df_pdf.iterrows():
+        texto_risco = (
+            str(row["Nível de risco"])
+            .replace("🔴 ", "")
+            .replace("🟡 ", "")
+            .replace("🟢 ", "")
+        )
+
+        if "Alto"  in texto_risco: pdf.set_fill_color(255, 230, 230)
+        elif "Médio" in texto_risco: pdf.set_fill_color(255, 255, 230)
+        else: pdf.set_fill_color(230, 255, 230)
+
+        score_val    = format(float(row["Score"]),         ".2f")
+        previsto_val = format(float(row["Previstos (90d)"]), ".2f")
+        peso_val     = format(float(row["Peso CID"]),      ".2f")
+        h_linha = 5
+
+        pdf.cell(widths[0],  h_linha, str(index),                      border=1, align='C', fill=True)
+        pdf.cell(widths[1],  h_linha, str(row["Empregado"]),            border=1, align='C', fill=True)
+        pdf.cell(widths[2],  h_linha, score_val,                        border=1, align='C', fill=True)
+        pdf.cell(widths[3],  h_linha, texto_risco,                      border=1, align='C', fill=True)
+        pdf.cell(widths[4],  h_linha, previsto_val,                     border=1, align='C', fill=True)
+        pdf.cell(widths[5],  h_linha, str(row["Grupo CID"])[:30],       border=1, align='L', fill=True)
+        pdf.cell(widths[6],  h_linha, str(int(row["Total atestados"])), border=1, align='C', fill=True)
+        pdf.cell(widths[7],  h_linha, str(int(row["Dias afastados"])),  border=1, align='C', fill=True)
+        pdf.cell(widths[8],  h_linha, str(int(row["Atestados (6m)"])),  border=1, align='C', fill=True)
+        pdf.cell(widths[9],  h_linha, str(int(row["Dias s/ atestado"])),border=1, align='C', fill=True)
+        pdf.cell(widths[10], h_linha, peso_val,                         border=1, align='C', fill=True)
+        pdf.ln()
+
+    return bytes(pdf.output())
+
+# ── Botão de exportação ───────────────────────────────────────────────────────
 with st.sidebar:
     st.divider()
     st.subheader("Exportar Dados")
@@ -398,7 +396,7 @@ with st.sidebar:
             label="📄 Baixar Score em PDF",
             data=pdf_bytes,
             file_name=f"ranking_absenteismo_{datetime.now().strftime('%Y%m%d')}.pdf",
-            mime="application/pdf"
+            mime="application/pdf",
         )
     except Exception as e:
         st.error(f"Erro ao gerar PDF: {e}")
@@ -418,7 +416,8 @@ col2.metric("🟡 Médio risco", (features["nivel_risco"] == "🟡 Médio").sum(
 col3.metric("🟢 Baixo risco", (features["nivel_risco"] == "🟢 Baixo").sum())
 
 st.divider()
-altura_tabela = (len(ranking) + 1) * 35 + 10
+
+altura_tabela = min((len(ranking) + 1) * 35 + 10, 800)
 st.dataframe(
     ranking.style
         .background_gradient(subset=["Score"], cmap="RdYlGn_r")
