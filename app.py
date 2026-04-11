@@ -3,17 +3,19 @@ import pandas as pd
 import numpy as np
 import glob
 import os
+import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
 from datetime import datetime
 from xgboost import XGBRegressor
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_absolute_error
-from sklearn.preprocessing import MinMaxScaler
+import shap
 import warnings
 from fpdf import FPDF
 
 warnings.filterwarnings("ignore")
 
-# ── CORREÇÃO 1: st.set_page_config DEVE ser a primeira chamada Streamlit ──────
+# ── st.set_page_config DEVE ser a primeira chamada Streamlit ──────────────────
 st.set_page_config(
     page_title="Score de Risco de Absenteísmo",
     page_icon="⚠️",
@@ -28,11 +30,10 @@ if "logado" not in st.session_state:
 if not st.session_state.logado:
     st.title("🔒 Acesso Restrito")
     usuario = st.text_input("Usuário")
-    senha = st.text_input("Senha", type="password")
+    senha   = st.text_input("Senha", type="password")
     if st.button("Entrar"):
-        # CORREÇÃO 2: Credenciais via st.secrets (com fallback para dev local)
-        usuario_correto = st.secrets.get("usuario", "rhli") if hasattr(st, "secrets") else "rhli"
-        senha_correta   = st.secrets.get("senha", "Rhli@2026")   if hasattr(st, "secrets") else "Rhli@2026"
+        usuario_correto = st.secrets.get("usuario", "rhli")     if hasattr(st, "secrets") else "rhli"
+        senha_correta   = st.secrets.get("senha",   "Rhli@2026") if hasattr(st, "secrets") else "Rhli@2026"
         if usuario == usuario_correto and senha == senha_correta:
             st.session_state.logado = True
             st.rerun()
@@ -69,7 +70,7 @@ st.sidebar.markdown("""
 <div style='text-align: center;'>
     <p style='color: #64748b; font-size: 0.8rem; margin: 0;'>Da planilha ao modelo de IA.</p>
     <p style='color: #64748b; font-size: 0.8rem; margin: 0;'>Coleta, tratamento e análise de dados com métodos de Machine Learning em Python.</p>
-    <p style='color: #64748b; font-size: 0.8rem; margin: 0;'>Python · Numpy · Pandas · Streamlit · XGBoost · Scikit-Learn</p>
+    <p style='color: #64748b; font-size: 0.8rem; margin: 0;'>Python · Numpy · Pandas · Streamlit · XGBoost · Scikit-Learn · SHAP</p>
     <p style='color: #1e3a5f; font-weight: 600; margin: 6px 0 2px 0;'>Jorge Eduardo de Araujo Oliveira</p>
     <p style='color: #64748b; font-size: 0.8rem; margin: 0;'>Tecnólogo em Análise e Desenvolvimento de Sistemas</p>
 </div>
@@ -99,10 +100,28 @@ GRUPO_CID = {
 def get_cid_info(cid):
     if pd.isna(cid) or cid == "":
         return "Não informado", 1.0
-    cid = str(cid).strip().upper()
+    cid   = str(cid).strip().upper()
     letra = cid[0] if cid else "?"
-    info = GRUPO_CID.get(letra, {"grupo": "Outro", "peso": 1.0})
+    info  = GRUPO_CID.get(letra, {"grupo": "Outro", "peso": 1.0})
     return info["grupo"], info["peso"]
+
+# ── Nomes amigáveis para exibição SHAP ───────────────────────────────────────
+FEATURE_LABELS = {
+    "dias_desde_ultimo":    "Dias desde último atestado",
+    "total_atestados":      "Total de atestados",
+    "dias_afastados":       "Total de dias afastados",
+    "atestados_6m":         "Atestados (últimos 6 meses)",
+    "atestados_3m":         "Atestados (últimos 3 meses)",
+    "dias_afastados_6m":    "Dias afastados (6 meses)",
+    "freq_mensal":          "Frequência mensal de atestados",
+    "media_dias_atestado":  "Média de dias por atestado",
+    "tendencia_recente":    "Tendência recente (6m/total)",
+    "score_recencia":       "Score de recência",
+    "peso_cid_max":         "Peso máximo CID",
+    "peso_cid_ponderado":   "Peso CID ponderado por dias",
+    "diversidade_cid":      "Diversidade de CIDs",
+    "tem_cid_cronico":      "Tem CID crônico (peso ≥ 3)",
+}
 
 # ── Carregar CSVs ─────────────────────────────────────────────────────────────
 files = glob.glob("*.csv")
@@ -117,25 +136,24 @@ for file in files:
     dfs.append(df_tmp)
 
 df = pd.concat(dfs, ignore_index=True)
-df["MAT"] = df["MAT"].astype(str).str.zfill(6)
+df["MAT"]  = df["MAT"].astype(str).str.zfill(6)
 df["DATA"] = pd.to_datetime(df["DATA"], dayfirst=True, errors="coerce")
 df = df.dropna(subset=["DATA"])
 df = df.sort_values(["MAT", "DATA"])
-df["CID"] = df["CID"].astype(str).str.strip().str.upper()
+df["CID"]  = df["CID"].astype(str).str.strip().str.upper()
 df[["grupo_cid", "peso_cid"]] = df["CID"].apply(lambda c: pd.Series(get_cid_info(c)))
 
-# CORREÇÃO 3: usar pd.Timestamp em vez de misturar com datetime.now()
 hoje = pd.Timestamp.now().normalize()
 
 # ── Métricas principais ───────────────────────────────────────────────────────
 col1, col2, col3 = st.columns(3)
 col1.metric("Total de empregados", df["MAT"].nunique())
-col2.metric("Total de atestados", len(df))
-col3.metric("Dias afastados", int(df["DIAS"].sum()))
+col2.metric("Total de atestados",  len(df))
+col3.metric("Dias afastados",      int(df["DIAS"].sum()))
 
 # ── Janela temporal ───────────────────────────────────────────────────────────
 JANELA_IDEAL = 90
-span_dias = (hoje - df["DATA"].min()).days
+span_dias    = (hoje - df["DATA"].min()).days
 if span_dias < JANELA_IDEAL * 2:
     JANELA_DIAS = max(7, int(span_dias * 0.35))
     st.warning(
@@ -152,11 +170,11 @@ data_corte = hoje - pd.Timedelta(days=JANELA_DIAS)
 todos_empregados = pd.DataFrame(df["MAT"].unique(), columns=["MAT"])
 historico = df[df["DATA"] < data_corte].copy()
 historico = todos_empregados.merge(historico, on="MAT", how="left")
-historico["DIAS"]     = historico["DIAS"].fillna(0)
-historico["CID"]      = historico["CID"].fillna("Z")
-historico["DATA"]     = historico["DATA"].fillna(df["DATA"].min())
-historico["peso_cid"] = historico.apply(lambda row: get_cid_info(row["CID"])[1], axis=1)
-historico["grupo_cid"]= historico.apply(lambda row: get_cid_info(row["CID"])[0], axis=1)
+historico["DIAS"]      = historico["DIAS"].fillna(0)
+historico["CID"]       = historico["CID"].fillna("Z")
+historico["DATA"]      = historico["DATA"].fillna(df["DATA"].min())
+historico["peso_cid"]  = historico.apply(lambda row: get_cid_info(row["CID"])[1], axis=1)
+historico["grupo_cid"] = historico.apply(lambda row: get_cid_info(row["CID"])[0], axis=1)
 
 futuro = df[(df["DATA"] >= data_corte) & (df["DATA"] <= hoje)].copy()
 
@@ -189,44 +207,43 @@ def build_features(source: pd.DataFrame, ref_date: pd.Timestamp) -> pd.DataFrame
     source["cid_cronico"] = (source["peso_cid"] >= 3.0).astype(int)
     tem_cronico = source.groupby("MAT")["cid_cronico"].max().reset_index(name="tem_cid_cronico")
 
-    feat = freq.merge(dias, on="MAT", how="right")
+    feat = freq.merge(dias,     on="MAT", how="right")
     feat = feat.merge(ultimo,   on="MAT", how="right")
     feat = feat.merge(primeiro, on="MAT", how="right")
     feat = feat.merge(freq_6m,  on="MAT", how="left")
     feat = feat.merge(freq_3m,  on="MAT", how="left")
     feat = feat.merge(dias_6m,  on="MAT", how="left")
-    feat = feat.merge(peso_max_cid, on="MAT", how="left")
-    feat = feat.merge(peso_pond,    on="MAT", how="left")
+    feat = feat.merge(peso_max_cid,    on="MAT", how="left")
+    feat = feat.merge(peso_pond,       on="MAT", how="left")
     feat = feat.merge(diversidade_cid, on="MAT", how="left")
-    feat = feat.merge(tem_cronico,  on="MAT", how="left")
+    feat = feat.merge(tem_cronico,     on="MAT", how="left")
 
     feat = todos_empregados.merge(feat, on="MAT", how="left")
 
-    # CORREÇÃO 3: usar pd.Timestamp.now() consistentemente
     ref_now = pd.Timestamp.now()
     feat["dias_desde_ultimo"] = (ref_now - feat["data_ultimo"]).dt.days
 
     feat = feat.fillna({
-        "dias_desde_ultimo":    (ref_now - df["DATA"].min()).days,
-        "total_atestados":      0,
-        "dias_afastados":       0,
-        "atestados_6m":         0,
-        "atestados_3m":         0,
-        "dias_afastados_6m":    0,
-        "freq_mensal":          0,
-        "media_dias_atestado":  0,
-        "tendencia_recente":    0,
-        "score_recencia":       0,
-        "peso_cid_max":         0,
-        "peso_cid_ponderado":   0,
-        "diversidade_cid":      0,
-        "tem_cid_cronico":      0,
+        "dias_desde_ultimo":   (ref_now - df["DATA"].min()).days,
+        "total_atestados":     0,
+        "dias_afastados":      0,
+        "atestados_6m":        0,
+        "atestados_3m":        0,
+        "dias_afastados_6m":   0,
+        "freq_mensal":         0,
+        "media_dias_atestado": 0,
+        "tendencia_recente":   0,
+        "score_recencia":      0,
+        "peso_cid_max":        0,
+        "peso_cid_ponderado":  0,
+        "diversidade_cid":     0,
+        "tem_cid_cronico":     0,
     })
 
     feat["meses_historico"]     = ((feat["data_ultimo"] - feat["data_primeiro"]).dt.days / 30).clip(lower=1).fillna(1)
     feat["freq_mensal"]         = feat["total_atestados"] / feat["meses_historico"]
-    feat["media_dias_atestado"] = feat["dias_afastados"] / feat["total_atestados"].replace(0, 1)
-    feat["tendencia_recente"]   = feat["atestados_6m"] / (feat["total_atestados"] + 1)
+    feat["media_dias_atestado"] = feat["dias_afastados"]  / feat["total_atestados"].replace(0, 1)
+    feat["tendencia_recente"]   = feat["atestados_6m"]    / (feat["total_atestados"] + 1)
     feat["score_recencia"]      = 1 / (feat["dias_desde_ultimo"] + 1)
 
     return feat
@@ -241,7 +258,7 @@ target_real = (
 )
 features = features.merge(target_real, on="MAT", how="left").fillna({
     "atestados_futuros": 0,
-    "dias_futuros": 0,
+    "dias_futuros":      0,
 })
 
 # ── Grupo CID principal ───────────────────────────────────────────────────────
@@ -284,7 +301,7 @@ mae = mean_absolute_error(y_test, y_pred_test)
 
 st.sidebar.metric("MAE do modelo", f"{mae:.2f}")
 
-# CORREÇÃO 4: predição sem vazamento usando índices corretos
+# ── Predição sem vazamento ────────────────────────────────────────────────────
 pred_full = np.zeros(len(X))
 pred_full[X_train.index] = model.predict(X_train)
 pred_full[X_test.index]  = y_pred_test
@@ -306,27 +323,38 @@ def classificar_risco(score):
 
 features["nivel_risco"] = features["score_risco"].apply(classificar_risco)
 
-# CORREÇÃO 5: criar o DataFrame `ranking` antes de usá-lo
+# ── Ranking ───────────────────────────────────────────────────────────────────
 ranking = features[[
     "MAT", "score_risco", "nivel_risco", "atestados_previstos",
     "grupo_cid_principal", "total_atestados", "dias_afastados",
     "atestados_6m", "dias_desde_ultimo", "peso_cid_max",
 ]].sort_values("score_risco", ascending=False).reset_index(drop=True)
 
-ranking.index += 1  # posição começa em 1
+ranking.index += 1
 
 ranking = ranking.rename(columns={
-    "MAT":                  "Empregado",
-    "score_risco":          "Score",
-    "nivel_risco":          "Nível de risco",
-    "atestados_previstos":  "Previstos (90d)",
-    "grupo_cid_principal":  "Grupo CID",
-    "total_atestados":      "Total atestados",
-    "dias_afastados":       "Dias afastados",
-    "atestados_6m":         "Atestados (6m)",
-    "dias_desde_ultimo":    "Dias s/ atestado",
-    "peso_cid_max":         "Peso CID",
+    "MAT":                 "Empregado",
+    "score_risco":         "Score",
+    "nivel_risco":         "Nível de risco",
+    "atestados_previstos": "Previstos (90d)",
+    "grupo_cid_principal": "Grupo CID",
+    "total_atestados":     "Total atestados",
+    "dias_afastados":      "Dias afastados",
+    "atestados_6m":        "Atestados (6m)",
+    "dias_desde_ultimo":   "Dias s/ atestado",
+    "peso_cid_max":        "Peso CID",
 })
+
+# ── SHAP: calcular e cachear ──────────────────────────────────────────────────
+@st.cache_data(show_spinner="Calculando explicações SHAP…")
+def calcular_shap(_model, X_data):
+    explainer   = shap.TreeExplainer(_model)
+    shap_values = explainer(X_data)
+    return shap_values
+
+# X com labels amigáveis para exibição
+X_labeled   = X.rename(columns=FEATURE_LABELS)
+shap_values = calcular_shap(model, X_labeled)
 
 # ── Geração de PDF ────────────────────────────────────────────────────────────
 def gerar_pdf(df_ranking):
@@ -357,36 +385,33 @@ def gerar_pdf(df_ranking):
     for index, row in df_pdf.iterrows():
         texto_risco = (
             str(row["Nível de risco"])
-            .replace("🔴 ", "")
-            .replace("🟡 ", "")
-            .replace("🟢 ", "")
+            .replace("🔴 ", "").replace("🟡 ", "").replace("🟢 ", "")
         )
-
-        if "Alto"  in texto_risco: pdf.set_fill_color(255, 230, 230)
+        if   "Alto"  in texto_risco: pdf.set_fill_color(255, 230, 230)
         elif "Médio" in texto_risco: pdf.set_fill_color(255, 255, 230)
-        else: pdf.set_fill_color(230, 255, 230)
+        else:                        pdf.set_fill_color(230, 255, 230)
 
-        score_val    = format(float(row["Score"]),         ".2f")
+        score_val    = format(float(row["Score"]),           ".2f")
         previsto_val = format(float(row["Previstos (90d)"]), ".2f")
-        peso_val     = format(float(row["Peso CID"]),      ".2f")
+        peso_val     = format(float(row["Peso CID"]),        ".2f")
         h_linha = 5
 
-        pdf.cell(widths[0],  h_linha, str(index),                      border=1, align='C', fill=True)
-        pdf.cell(widths[1],  h_linha, str(row["Empregado"]),            border=1, align='C', fill=True)
-        pdf.cell(widths[2],  h_linha, score_val,                        border=1, align='C', fill=True)
-        pdf.cell(widths[3],  h_linha, texto_risco,                      border=1, align='C', fill=True)
-        pdf.cell(widths[4],  h_linha, previsto_val,                     border=1, align='C', fill=True)
-        pdf.cell(widths[5],  h_linha, str(row["Grupo CID"])[:30],       border=1, align='L', fill=True)
-        pdf.cell(widths[6],  h_linha, str(int(row["Total atestados"])), border=1, align='C', fill=True)
-        pdf.cell(widths[7],  h_linha, str(int(row["Dias afastados"])),  border=1, align='C', fill=True)
-        pdf.cell(widths[8],  h_linha, str(int(row["Atestados (6m)"])),  border=1, align='C', fill=True)
-        pdf.cell(widths[9],  h_linha, str(int(row["Dias s/ atestado"])),border=1, align='C', fill=True)
-        pdf.cell(widths[10], h_linha, peso_val,                         border=1, align='C', fill=True)
+        pdf.cell(widths[0],  h_linha, str(index),                       border=1, align='C', fill=True)
+        pdf.cell(widths[1],  h_linha, str(row["Empregado"]),             border=1, align='C', fill=True)
+        pdf.cell(widths[2],  h_linha, score_val,                         border=1, align='C', fill=True)
+        pdf.cell(widths[3],  h_linha, texto_risco,                       border=1, align='C', fill=True)
+        pdf.cell(widths[4],  h_linha, previsto_val,                      border=1, align='C', fill=True)
+        pdf.cell(widths[5],  h_linha, str(row["Grupo CID"])[:30],        border=1, align='L', fill=True)
+        pdf.cell(widths[6],  h_linha, str(int(row["Total atestados"])),  border=1, align='C', fill=True)
+        pdf.cell(widths[7],  h_linha, str(int(row["Dias afastados"])),   border=1, align='C', fill=True)
+        pdf.cell(widths[8],  h_linha, str(int(row["Atestados (6m)"])),   border=1, align='C', fill=True)
+        pdf.cell(widths[9],  h_linha, str(int(row["Dias s/ atestado"])), border=1, align='C', fill=True)
+        pdf.cell(widths[10], h_linha, peso_val,                          border=1, align='C', fill=True)
         pdf.ln()
 
     return bytes(pdf.output())
 
-# ── Botão de exportação ───────────────────────────────────────────────────────
+# ── Botão de exportação PDF ───────────────────────────────────────────────────
 with st.sidebar:
     st.divider()
     st.subheader("Exportar Dados")
@@ -401,7 +426,9 @@ with st.sidebar:
     except Exception as e:
         st.error(f"Erro ao gerar PDF: {e}")
 
-# ── Exibição ──────────────────────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════════
+# SEÇÃO 1 — Ranking
+# ═══════════════════════════════════════════════════════════════════════════════
 st.subheader("Score de Absenteísmo — Previsão para os próximos 90 dias")
 st.info(
     f"🔬 **Metodologia:** features construídas com dados anteriores a "
@@ -421,7 +448,213 @@ altura_tabela = min((len(ranking) + 1) * 35 + 10, 800)
 st.dataframe(
     ranking.style
         .background_gradient(subset=["Score"], cmap="RdYlGn_r")
-        .format({"Score": "{:.2f}", "Previstos (90d)": "{:.2f}", "Peso CID": "{:.2f}"}),
+        .format({
+            "Score": "{:.2f}",
+            "Previstos (90d)": "{:.2f}",
+            "Peso CID": "{:.2f}",
+            "Dias afastados": "{:.0f}",
+            "Total atestados": "{:.0f}",
+            "Atestados (6m)": "{:.0f}",
+            "Dias s/ atestado": "{:.0f}",
+        }),
     use_container_width=True,
     height=altura_tabela,
 )
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# SEÇÃO 2 — Análise SHAP
+# ═══════════════════════════════════════════════════════════════════════════════
+st.divider()
+st.header("🔍 Explicabilidade do Modelo — SHAP")
+st.markdown(
+    "O SHAP (SHapley Additive exPlanations) decompõe a previsão de cada empregado "
+    "mostrando **quanto cada variável contribuiu** para aumentar ou reduzir o risco previsto. "
+    "Valores positivos (vermelho) elevam o risco; negativos (azul) reduzem."
+)
+
+tab1, tab2, tab3 = st.tabs([
+    "📊 Importância Global",
+    "🌐 Impacto por Feature (Beeswarm)",
+    "👤 Análise Individual",
+])
+
+# ── Tab 1: Importância média global ──────────────────────────────────────────
+with tab1:
+    st.subheader("Importância Média das Features (|SHAP|)")
+    st.caption(
+        "Média do valor absoluto dos SHAP values de todos os empregados. "
+        "Quanto maior, mais relevante a feature é para o modelo globalmente."
+    )
+
+    feat_names = X_labeled.columns.tolist()
+    mean_shap  = np.abs(shap_values.values).mean(axis=0)
+
+    df_importance = (
+        pd.DataFrame({"Feature": feat_names, "Importância": mean_shap})
+        .sort_values("Importância", ascending=True)
+    )
+
+    fig, ax = plt.subplots(figsize=(9, 5))
+    colors = plt.cm.RdYlGn_r(np.linspace(0.15, 0.85, len(df_importance)))
+    bars   = ax.barh(df_importance["Feature"], df_importance["Importância"],
+                     color=colors, edgecolor="none", height=0.65)
+
+    ax.set_xlabel("Importância média |SHAP|", fontsize=10)
+    ax.set_title("Contribuição Global das Features", fontsize=12, fontweight="bold", pad=10)
+    ax.spines[["top", "right", "left"]].set_visible(False)
+    ax.tick_params(axis="y", labelsize=9)
+    ax.tick_params(axis="x", labelsize=9)
+    ax.xaxis.grid(True, linestyle="--", alpha=0.4)
+    ax.set_axisbelow(True)
+
+    for bar, val in zip(bars, df_importance["Importância"]):
+        ax.text(
+            val + max(df_importance["Importância"]) * 0.01,
+            bar.get_y() + bar.get_height() / 2,
+            f"{val:.3f}", va="center", ha="left", fontsize=8, color="#333"
+        )
+
+    fig.tight_layout()
+    st.pyplot(fig, use_container_width=True)
+    plt.close(fig)
+
+# ── Tab 2: Beeswarm ───────────────────────────────────────────────────────────
+with tab2:
+    st.subheader("Impacto de Cada Feature em Todos os Empregados")
+    st.caption(
+        "Cada ponto é um empregado. A posição horizontal mostra se a feature **aumentou** "
+        "(direita, vermelho) ou **diminuiu** (esquerda, azul) o risco previsto. "
+        "A cor indica o valor real da feature: vermelho = alto, azul = baixo."
+    )
+
+    order          = np.argsort(mean_shap)
+    shap_vals_ord  = shap_values.values[:, order]
+    feat_vals_ord  = X_labeled.values[:, order]
+    feat_names_ord = [feat_names[i] for i in order]
+
+    fig2, ax2 = plt.subplots(figsize=(10, 6))
+
+    for i, (sv, fv) in enumerate(zip(shap_vals_ord.T, feat_vals_ord.T)):
+        fv_min, fv_max = fv.min(), fv.max()
+        fv_norm = (fv - fv_min) / (fv_max - fv_min + 1e-9)
+        jitter  = np.random.uniform(-0.3, 0.3, size=len(sv))
+        sc = ax2.scatter(
+            sv, i + jitter,
+            c=fv_norm, cmap="RdBu_r", vmin=0, vmax=1,
+            s=14, alpha=0.6, linewidths=0,
+        )
+
+    ax2.axvline(0, color="#555", linewidth=0.8, linestyle="--")
+    ax2.set_yticks(range(len(feat_names_ord)))
+    ax2.set_yticklabels(feat_names_ord, fontsize=8)
+    ax2.set_xlabel("Valor SHAP (impacto na previsão)", fontsize=10)
+    ax2.set_title("Beeswarm — Distribuição dos SHAP Values", fontsize=12,
+                  fontweight="bold", pad=10)
+    ax2.spines[["top", "right"]].set_visible(False)
+    ax2.xaxis.grid(True, linestyle="--", alpha=0.3)
+    ax2.set_axisbelow(True)
+
+    cbar = fig2.colorbar(sc, ax=ax2, pad=0.01, fraction=0.015)
+    cbar.set_label("Valor da feature\n(azul=baixo · vermelho=alto)", fontsize=8)
+    cbar.ax.tick_params(labelsize=7)
+
+    fig2.tight_layout()
+    st.pyplot(fig2, use_container_width=True)
+    plt.close(fig2)
+
+# ── Tab 3: Análise individual ─────────────────────────────────────────────────
+with tab3:
+    st.subheader("Explicação Individual por Empregado")
+    st.caption(
+        "Selecione um empregado para ver quais features mais contribuíram "
+        "para o score de risco **dele especificamente**."
+    )
+
+    lista_empregados = features["MAT"].tolist()
+    empregado_sel = st.selectbox(
+        "Selecione a matrícula do empregado:",
+        options=lista_empregados,
+        format_func=lambda m: (
+            f"{m}  "
+            f"(Score: {features.loc[features['MAT']==m, 'score_risco'].values[0]:.1f}"
+            f"  |  {features.loc[features['MAT']==m, 'nivel_risco'].values[0]})"
+        )
+    )
+
+    idx_emp   = features.index[features["MAT"] == empregado_sel].tolist()[0]
+    sv_emp    = shap_values.values[idx_emp]
+    fv_emp    = X_labeled.iloc[idx_emp].values
+    pred_emp  = features.loc[idx_emp, "atestados_previstos"]
+    score_emp = features.loc[idx_emp, "score_risco"]
+    risco_emp = features.loc[idx_emp, "nivel_risco"]
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Score de Risco",        f"{score_emp:.1f} / 100")
+    c2.metric("Previsão de Atestados", f"{pred_emp:.2f}")
+    c3.metric("Nível de Risco",        risco_emp)
+
+    st.markdown("---")
+
+    # Gráfico waterfall manual (barras horizontais)
+    df_emp = pd.DataFrame({
+        "Feature": feat_names,
+        "SHAP":    sv_emp,
+        "Valor":   fv_emp,
+        "Label":   X_labeled.columns.tolist(),
+    }).sort_values("SHAP", key=abs, ascending=True).tail(14)
+
+    cores = ["#d73027" if v > 0 else "#4575b4" for v in df_emp["SHAP"]]
+
+    fig3, ax3 = plt.subplots(figsize=(9, 5))
+    bars3 = ax3.barh(df_emp["Label"], df_emp["SHAP"],
+                     color=cores, edgecolor="none", height=0.65)
+
+    ax3.axvline(0, color="#555", linewidth=0.8, linestyle="--")
+    ax3.set_xlabel("Contribuição SHAP (impacto na previsão)", fontsize=10)
+    ax3.set_title(
+        f"Matrícula {empregado_sel} — Contribuição de cada feature",
+        fontsize=12, fontweight="bold", pad=10
+    )
+    ax3.spines[["top", "right", "left"]].set_visible(False)
+    ax3.tick_params(axis="y", labelsize=8)
+    ax3.xaxis.grid(True, linestyle="--", alpha=0.4)
+    ax3.set_axisbelow(True)
+
+    for bar, row in zip(bars3, df_emp.itertuples()):
+        x_pos = bar.get_width()
+        sign  = "+" if x_pos >= 0 else ""
+        label = f"{sign}{x_pos:.3f}  (val={row.Valor:.2f})"
+        ax3.text(
+            x_pos + (0.003 if x_pos >= 0 else -0.003),
+            bar.get_y() + bar.get_height() / 2,
+            label, va="center",
+            ha="left" if x_pos >= 0 else "right",
+            fontsize=7.5, color="#222"
+        )
+
+    legenda = [
+        mpatches.Patch(color="#d73027", label="Aumenta o risco (SHAP > 0)"),
+        mpatches.Patch(color="#4575b4", label="Reduz o risco (SHAP < 0)"),
+    ]
+    ax3.legend(handles=legenda, fontsize=8, loc="lower right")
+    ax3.set_xlim(df_emp["SHAP"].min() * 1.35, df_emp["SHAP"].max() * 1.35)
+
+    fig3.tight_layout()
+    st.pyplot(fig3, use_container_width=True)
+    plt.close(fig3)
+
+    # Tabela de detalhamento
+    st.markdown("##### Detalhamento por feature")
+    df_detalhe = pd.DataFrame({
+        "Feature":           X_labeled.columns.tolist(),
+        "Valor Real":        X_labeled.iloc[idx_emp].values,
+        "Contribuição SHAP": sv_emp,
+    }).sort_values("Contribuição SHAP", key=abs, ascending=False).reset_index(drop=True)
+
+    st.dataframe(
+        df_detalhe.style
+            .format({"Valor Real": "{:.3f}", "Contribuição SHAP": "{:+.4f}"})
+            .background_gradient(subset=["Contribuição SHAP"], cmap="RdBu_r"),
+        use_container_width=True,
+        height=460,
+    )
