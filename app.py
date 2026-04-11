@@ -9,7 +9,6 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import MinMaxScaler
 import warnings
 from datetime import datetime
-from fpdf import FPDF
 
 warnings.filterwarnings("ignore")
 
@@ -322,7 +321,7 @@ model = XGBRegressor(
 )
 model.fit(X_train, y_train)
 
-pred_raw = model.predict(X)
+pred_raw = model.predict(X_test)
 scaler_final = MinMaxScaler(feature_range=(0, 100))
 features["score_risco"] = scaler_final.fit_transform(pred_raw.reshape(-1,1)).flatten().round(1)
 features["atestados_previstos"] = pred_raw.clip(min=0).round(1)
