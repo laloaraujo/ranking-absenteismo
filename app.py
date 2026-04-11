@@ -11,7 +11,6 @@ import warnings
 from datetime import datetime
 from fpdf import FPDF
 
-
 warnings.filterwarnings("ignore")
 
 def gerar_pdf(df_ranking):
@@ -304,21 +303,30 @@ grupo_predominante = (
 features = features.merge(grupo_predominante, on="MAT", how="left")
 features["grupo_cid_principal"] = features["grupo_cid_principal"].fillna("Não informado")
 
-#MODELO
+# ── Modelo XGBoost (CORRIGIDO E COMPLETO) ─────────────────────────
 
 from sklearn.metrics import mean_absolute_error
 from sklearn.model_selection import train_test_split
 
-# ── Features e target ─────────────────────────────────────────────
-X = features[feature_cols]
-y = features["atestados_futuros"]
+# 🔹 Definição das features (GARANTIDO)
+feature_cols = [
+    "dias_desde_ultimo", "total_atestados", "dias_afastados",
+    "atestados_6m", "atestados_3m", "dias_afastados_6m",
+    "freq_mensal", "media_dias_atestado", "tendencia_recente",
+    "score_recencia", "peso_cid_max", "peso_cid_ponderado",
+    "diversidade_cid", "tem_cid_cronico",
+]
 
-# ── Split (mantido simples, mas sem vazamento depois) ─────────────
+# 🔹 Garantir que não existem NaNs
+X = features[feature_cols].fillna(0)
+y = features["atestados_futuros"].fillna(0)
+
+# ── Split (sem vazamento na predição) ─────────────────────────────
 X_train, X_test, y_train, y_test = train_test_split(
     X, y, test_size=0.2, random_state=42
 )
 
-# ── Modelo XGBoost (ajustado) ─────────────────────────────────────
+# ── Modelo melhorado ──────────────────────────────────────────────
 model = XGBRegressor(
     n_estimators=500,
     max_depth=5,
@@ -330,23 +338,27 @@ model = XGBRegressor(
 
 model.fit(X_train, y_train)
 
-# ── Avaliação (AGORA CORRETA) ─────────────────────────────────────
+# ── Avaliação do modelo ───────────────────────────────────────────
 y_pred_test = model.predict(X_test)
 mae = mean_absolute_error(y_test, y_pred_test)
 
 print(f"MAE (erro médio absoluto): {mae:.4f}")
 
+# (opcional: mostrar no Streamlit)
+st.sidebar.metric("MAE do modelo", f"{mae:.2f}")
+
 # ── Predição SEM vazamento ────────────────────────────────────────
-# Criar vetor vazio
 pred_full = np.zeros(len(X))
 
-# Preenche treino e teste separadamente
+# treino
 pred_full[X_train.index] = model.predict(X_train)
-pred_full[X_test.index]  = y_pred_test
+
+# teste
+pred_full[X_test.index] = y_pred_test
 
 features["atestados_previstos"] = np.clip(pred_full, a_min=0, a_max=None).round(2)
 
-# ── Score baseado em ranking (MUITO melhor que MinMax) ────────────
+# ── Score robusto (percentil) ─────────────────────────────────────
 features["score_risco"] = (
     features["atestados_previstos"]
     .rank(pct=True) * 100
