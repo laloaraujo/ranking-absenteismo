@@ -145,7 +145,8 @@ df = df.sort_values(["MAT", "DATA"])
 df["CID"]  = df["CID"].astype(str).str.strip().str.upper()
 df[["grupo_cid", "peso_cid"]] = df["CID"].apply(lambda c: pd.Series(get_cid_info(c)))
 
-hoje = pd.Timestamp.now().normalize()
+ultimo_mes = pd.Timestamp.now().replace(day=1) - pd.Timedelta(days=1)
+hoje = ultimo_mes.normalize()
 
 # ── Métricas principais ───────────────────────────────────────────────────────
 col1, col2, col3 = st.columns(3)
