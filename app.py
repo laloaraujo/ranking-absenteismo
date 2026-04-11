@@ -9,6 +9,8 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import MinMaxScaler
 import warnings
 from datetime import datetime
+from fpdf import FPDF
+
 
 warnings.filterwarnings("ignore")
 
@@ -302,48 +304,64 @@ grupo_predominante = (
 features = features.merge(grupo_predominante, on="MAT", how="left")
 features["grupo_cid_principal"] = features["grupo_cid_principal"].fillna("Não informado")
 
-# ── Modelo XGBoost ───────────────────────────────────────────────────────────
-feature_cols = [
-    "dias_desde_ultimo", "total_atestados", "dias_afastados",
-    "atestados_6m", "atestados_3m", "dias_afastados_6m",
-    "freq_mensal", "media_dias_atestado", "tendencia_recente",
-    "score_recencia", "peso_cid_max", "peso_cid_ponderado",
-    "diversidade_cid", "tem_cid_cronico",
-]
+#MODELO
 
+from sklearn.metrics import mean_absolute_error
+from sklearn.model_selection import train_test_split
+
+# ── Features e target ─────────────────────────────────────────────
 X = features[feature_cols]
 y = features["atestados_futuros"]
 
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-model = XGBRegressor(
-    n_estimators=300, max_depth=4, learning_rate=0.03,
-    subsample=0.8, colsample_bytree=0.8, random_state=42,
+# ── Split (mantido simples, mas sem vazamento depois) ─────────────
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.2, random_state=42
 )
+
+# ── Modelo XGBoost (ajustado) ─────────────────────────────────────
+model = XGBRegressor(
+    n_estimators=500,
+    max_depth=5,
+    learning_rate=0.05,
+    subsample=0.8,
+    colsample_bytree=0.8,
+    random_state=42,
+)
+
 model.fit(X_train, y_train)
 
-pred_raw = model.predict(X_test)
-scaler_final = MinMaxScaler(feature_range=(0, 100))
-features["score_risco"] = scaler_final.fit_transform(pred_raw.reshape(-1,1)).flatten().round(1)
-features["atestados_previstos"] = pred_raw.clip(min=0).round(1)
+# ── Avaliação (AGORA CORRETA) ─────────────────────────────────────
+y_pred_test = model.predict(X_test)
+mae = mean_absolute_error(y_test, y_pred_test)
 
+print(f"MAE (erro médio absoluto): {mae:.4f}")
+
+# ── Predição SEM vazamento ────────────────────────────────────────
+# Criar vetor vazio
+pred_full = np.zeros(len(X))
+
+# Preenche treino e teste separadamente
+pred_full[X_train.index] = model.predict(X_train)
+pred_full[X_test.index]  = y_pred_test
+
+features["atestados_previstos"] = np.clip(pred_full, a_min=0, a_max=None).round(2)
+
+# ── Score baseado em ranking (MUITO melhor que MinMax) ────────────
+features["score_risco"] = (
+    features["atestados_previstos"]
+    .rank(pct=True) * 100
+).round(1)
+
+# ── Classificação de risco ────────────────────────────────────────
 def classificar_risco(score):
-    if score >= 70:   return "🔴 Alto"
-    elif score >= 40: return "🟡 Médio"
-    else:             return "🟢 Baixo"
+    if score >= 75:
+        return "🔴 Alto"
+    elif score >= 40:
+        return "🟡 Médio"
+    else:
+        return "🟢 Baixo"
 
 features["nivel_risco"] = features["score_risco"].apply(classificar_risco)
-
-# ── Ranking final ─────────────────────────────────────────────────────────────
-ranking = features[[
-    "MAT", "score_risco", "nivel_risco", "atestados_previstos",
-    "grupo_cid_principal", "total_atestados", "dias_afastados",
-    "atestados_6m", "dias_desde_ultimo", "peso_cid_max"
-]].copy()
-
-ranking["dias_afastados"] = ranking["dias_afastados"].fillna(0).astype(int)
-ranking = ranking.sort_values("score_risco", ascending=False).reset_index(drop=True)
-ranking.index = ranking.index + 1
-ranking.index.name = "Posição"
 
 ranking = ranking.rename(columns={
     "MAT": "Empregado",
