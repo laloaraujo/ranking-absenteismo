@@ -429,6 +429,299 @@ with st.sidebar:
     except Exception as e:
         st.error(f"Erro ao gerar PDF: {e}")
 
+# ── Geração de PDF SHAP ───────────────────────────────────────────────────────
+def gerar_pdf_shap(features, X_labeled, shap_values, mean_shap, feat_names):
+    from fpdf import FPDF
+    import io, tempfile, os
+
+    pdf = FPDF(orientation='L', unit='mm', format='A4')
+    pdf.set_auto_page_break(auto=True, margin=15)
+
+    # ── Paleta ────────────────────────────────────────────────────────────────
+    AZUL_ESCURO  = (30,  58,  95)
+    AZUL_CLARO   = (220, 230, 245)
+    VERMELHO     = (215, 48,  39)
+    AZUL_BAR     = (69,  117, 180)
+    CINZA_TEXTO  = (60,  60,  60)
+    BRANCO       = (255, 255, 255)
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # PÁGINA 1 — Importância Global
+    # ══════════════════════════════════════════════════════════════════════════
+    pdf.add_page()
+
+    # Cabeçalho
+    pdf.set_fill_color(*AZUL_ESCURO)
+    pdf.rect(0, 0, 297, 22, 'F')
+    pdf.set_text_color(*BRANCO)
+    pdf.set_font("Arial", "B", 14)
+    pdf.set_xy(10, 5)
+    pdf.cell(0, 12, "Relatório SHAP — Explicabilidade do Modelo de Risco de Absenteísmo", ln=True)
+
+    pdf.set_font("Arial", "", 8)
+    pdf.set_xy(10, 16)
+    pdf.cell(0, 5, f"Gerado em {datetime.now().strftime('%d/%m/%Y %H:%M')}", ln=True)
+
+    pdf.set_text_color(*CINZA_TEXTO)
+    pdf.set_xy(10, 26)
+    pdf.set_font("Arial", "B", 11)
+    pdf.cell(0, 7, "Importância Média Global das Features (|SHAP|)", ln=True)
+
+    pdf.set_font("Arial", "", 8)
+    pdf.set_xy(10, 33)
+    pdf.multi_cell(
+        277, 5,
+        "A importância SHAP mede quanto cada variável influencia a previsão do modelo em média, "
+        "considerando todos os empregados. Quanto maior o valor, mais relevante é a feature.",
+        ln=True
+    )
+
+    # Gráfico de importância como imagem temporária
+    df_imp = (
+        pd.DataFrame({"Feature": feat_names, "Importância": mean_shap})
+        .sort_values("Importância", ascending=True)
+    )
+
+    fig, ax = plt.subplots(figsize=(11, 5))
+    colors_bar = plt.cm.RdYlGn_r(np.linspace(0.15, 0.85, len(df_imp)))
+    bars = ax.barh(df_imp["Feature"], df_imp["Importância"],
+                   color=colors_bar, edgecolor="none", height=0.65)
+    ax.set_xlabel("Importância média |SHAP|", fontsize=9)
+    ax.set_title("Contribuição Global das Features", fontsize=11, fontweight="bold")
+    ax.spines[["top", "right", "left"]].set_visible(False)
+    ax.tick_params(axis="y", labelsize=8)
+    ax.xaxis.grid(True, linestyle="--", alpha=0.4)
+    ax.set_axisbelow(True)
+    for bar, val in zip(bars, df_imp["Importância"]):
+        ax.text(val + max(df_imp["Importância"]) * 0.01,
+                bar.get_y() + bar.get_height() / 2,
+                f"{val:.3f}", va="center", ha="left", fontsize=7, color="#333")
+    fig.tight_layout()
+
+    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp_img:
+        img_path = tmp_img.name
+    fig.savefig(img_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+    pdf.image(img_path, x=10, y=42, w=277)
+    os.unlink(img_path)
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # PÁGINA 2 — Beeswarm
+    # ══════════════════════════════════════════════════════════════════════════
+    pdf.add_page()
+
+    pdf.set_fill_color(*AZUL_ESCURO)
+    pdf.rect(0, 0, 297, 22, 'F')
+    pdf.set_text_color(*BRANCO)
+    pdf.set_font("Arial", "B", 14)
+    pdf.set_xy(10, 5)
+    pdf.cell(0, 12, "Relatório SHAP — Distribuição dos Valores por Feature (Beeswarm)", ln=True)
+
+    pdf.set_text_color(*CINZA_TEXTO)
+    pdf.set_xy(10, 26)
+    pdf.set_font("Arial", "B", 11)
+    pdf.cell(0, 7, "Impacto de Cada Feature em Todos os Empregados", ln=True)
+
+    pdf.set_font("Arial", "", 8)
+    pdf.set_xy(10, 33)
+    pdf.multi_cell(
+        277, 5,
+        "Cada ponto representa um empregado. A posição horizontal mostra se a feature aumentou "
+        "(direita/vermelho) ou diminuiu (esquerda/azul) o risco previsto. "
+        "A cor indica o valor da feature: vermelho = alto, azul = baixo.",
+        ln=True
+    )
+
+    order = np.argsort(mean_shap)
+    shap_vals_ord = shap_values.values[:, order]
+    feat_vals_ord = X_labeled.values[:, order]
+    feat_names_ord = [feat_names[i] for i in order]
+
+    fig2, ax2 = plt.subplots(figsize=(11, 6))
+    sc = None
+    for i, (sv, fv) in enumerate(zip(shap_vals_ord.T, feat_vals_ord.T)):
+        fv_min, fv_max = fv.min(), fv.max()
+        fv_norm = (fv - fv_min) / (fv_max - fv_min + 1e-9)
+        jitter = np.random.uniform(-0.3, 0.3, size=len(sv))
+        sc = ax2.scatter(sv, i + jitter, c=fv_norm, cmap="RdBu_r",
+                         vmin=0, vmax=1, s=14, alpha=0.6, linewidths=0)
+    ax2.axvline(0, color="#555", linewidth=0.8, linestyle="--")
+    ax2.set_yticks(range(len(feat_names_ord)))
+    ax2.set_yticklabels(feat_names_ord, fontsize=8)
+    ax2.set_xlabel("Valor SHAP (impacto na previsão)", fontsize=9)
+    ax2.set_title("Beeswarm — Distribuição dos SHAP Values", fontsize=11, fontweight="bold")
+    ax2.spines[["top", "right"]].set_visible(False)
+    ax2.xaxis.grid(True, linestyle="--", alpha=0.3)
+    if sc:
+        cbar = fig2.colorbar(sc, ax=ax2, pad=0.01, fraction=0.015)
+        cbar.set_label("Valor da feature\n(azul=baixo · vermelho=alto)", fontsize=7)
+    fig2.tight_layout()
+
+    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp_img2:
+        img_path2 = tmp_img2.name
+    fig2.savefig(img_path2, dpi=150, bbox_inches="tight")
+    plt.close(fig2)
+
+    pdf.image(img_path2, x=10, y=42, w=277)
+    os.unlink(img_path2)
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # PÁGINAS 3+ — Análise individual por empregado (Top 20 por score)
+    # ══════════════════════════════════════════════════════════════════════════
+    top_empregados = features.nlargest(20, "score_risco")
+
+    for _, emp_row in top_empregados.iterrows():
+        pdf.add_page()
+
+        # Cabeçalho colorido por nível de risco
+        nivel = emp_row["nivel_risco"]
+        if "Alto" in nivel:
+            cor_header = (180, 30, 30)
+        elif "Médio" in nivel:
+            cor_header = (180, 140, 10)
+        else:
+            cor_header = (30, 130, 60)
+
+        pdf.set_fill_color(*cor_header)
+        pdf.rect(0, 0, 297, 22, 'F')
+        pdf.set_text_color(*BRANCO)
+        pdf.set_font("Arial", "B", 13)
+        pdf.set_xy(10, 5)
+        mat = emp_row["MAT"]
+        score = emp_row["score_risco"]
+        previstos = emp_row["atestados_previstos"]
+        nivel_txt = nivel.replace("🔴 ", "").replace("🟡 ", "").replace("🟢 ", "")
+        pdf.cell(
+            0, 12,
+            f"Empregado: {mat}   |   Score: {score:.1f}/100   |   "
+            f"Previstos (90d): {previstos:.2f}   |   Risco: {nivel_txt}",
+            ln=True
+        )
+
+        pdf.set_text_color(*CINZA_TEXTO)
+        pdf.set_xy(10, 26)
+        pdf.set_font("Arial", "B", 10)
+        pdf.cell(0, 6, "Contribuição SHAP por Feature — Análise Individual", ln=True)
+
+        # Gráfico waterfall individual
+        idx_emp = features.index[features["MAT"] == mat].tolist()[0]
+        sv_emp  = shap_values.values[idx_emp]
+        fv_emp  = X_labeled.iloc[idx_emp].values
+
+        df_emp = pd.DataFrame({
+            "Label":  X_labeled.columns.tolist(),
+            "SHAP":   sv_emp,
+            "Valor":  fv_emp,
+        }).sort_values("SHAP", key=abs, ascending=True).tail(14)
+
+        cores_emp = ["#d73027" if v > 0 else "#4575b4" for v in df_emp["SHAP"]]
+
+        fig3, ax3 = plt.subplots(figsize=(11, 5))
+        bars3 = ax3.barh(df_emp["Label"], df_emp["SHAP"],
+                         color=cores_emp, edgecolor="none", height=0.65)
+        ax3.axvline(0, color="#555", linewidth=0.8, linestyle="--")
+        ax3.set_xlabel("Contribuição SHAP", fontsize=9)
+        ax3.set_title(f"Matrícula {mat} — Contribuição de cada feature", fontsize=10, fontweight="bold")
+        ax3.spines[["top", "right", "left"]].set_visible(False)
+        ax3.tick_params(axis="y", labelsize=8)
+        ax3.xaxis.grid(True, linestyle="--", alpha=0.4)
+        ax3.set_axisbelow(True)
+        for bar, row in zip(bars3, df_emp.itertuples()):
+            x_pos = bar.get_width()
+            sign  = "+" if x_pos >= 0 else ""
+            ax3.text(
+                x_pos + (0.002 if x_pos >= 0 else -0.002),
+                bar.get_y() + bar.get_height() / 2,
+                f"{sign}{x_pos:.3f}  (val={row.Valor:.2f})",
+                va="center", ha="left" if x_pos >= 0 else "right",
+                fontsize=7, color="#222"
+            )
+        import matplotlib.patches as mpatches
+        legenda = [
+            mpatches.Patch(color="#d73027", label="Aumenta o risco (SHAP > 0)"),
+            mpatches.Patch(color="#4575b4", label="Reduz o risco (SHAP < 0)"),
+        ]
+        ax3.legend(handles=legenda, fontsize=7, loc="lower right")
+        ax3.set_xlim(df_emp["SHAP"].min() * 1.35, df_emp["SHAP"].max() * 1.35)
+        fig3.tight_layout()
+
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp3:
+            img_path3 = tmp3.name
+        fig3.savefig(img_path3, dpi=130, bbox_inches="tight")
+        plt.close(fig3)
+
+        pdf.image(img_path3, x=10, y=34, w=200)
+        os.unlink(img_path3)
+
+        # Tabela de detalhamento
+        df_detalhe = pd.DataFrame({
+            "Feature":    X_labeled.columns.tolist(),
+            "Valor Real": fv_emp,
+            "SHAP":       sv_emp,
+        }).sort_values("SHAP", key=abs, ascending=False).reset_index(drop=True)
+
+        y_table = 150
+        pdf.set_xy(10, y_table)
+        pdf.set_font("Arial", "B", 8)
+
+        # Cabeçalho da tabela
+        pdf.set_fill_color(*AZUL_ESCURO)
+        pdf.set_text_color(*BRANCO)
+        pdf.cell(100, 6, "Feature",     border=1, fill=True, align='C')
+        pdf.cell(40,  6, "Valor Real",  border=1, fill=True, align='C')
+        pdf.cell(40,  6, "Contrib. SHAP", border=1, fill=True, align='C')
+        pdf.ln()
+
+        pdf.set_font("Arial", "", 7)
+        for _, drow in df_detalhe.iterrows():
+            shap_val = drow["SHAP"]
+            if shap_val > 0.01:
+                pdf.set_fill_color(255, 230, 230)
+            elif shap_val < -0.01:
+                pdf.set_fill_color(220, 235, 255)
+            else:
+                pdf.set_fill_color(245, 245, 245)
+            pdf.set_text_color(*CINZA_TEXTO)
+            sign = "+" if shap_val >= 0 else ""
+            pdf.cell(100, 5, str(drow["Feature"])[:45], border=1, fill=True)
+            pdf.cell(40,  5, f"{drow['Valor Real']:.3f}", border=1, fill=True, align='C')
+            pdf.cell(40,  5, f"{sign}{shap_val:.4f}",     border=1, fill=True, align='C')
+            pdf.ln()
+
+    return bytes(pdf.output())
+
+# ── Botões de exportação PDF SHAP ──────────────────────────────────────────────────
+with st.sidebar:
+    st.divider()
+    st.subheader("Exportar Dados")
+
+    # PDF de ranking
+    try:
+        pdf_bytes = gerar_pdf(ranking)
+        st.download_button(
+            label="📄 Baixar SHAP em PDF",
+            data=pdf_bytes,
+            file_name=f"ranking_absenteismo_{datetime.now().strftime('%Y%m%d')}.pdf",
+            mime="application/pdf",
+        )
+    except Exception as e:
+        st.error(f"Erro ao gerar PDF de ranking: {e}")
+
+    # PDF SHAP
+    try:
+        pdf_shap_bytes = gerar_pdf_shap(
+            features, X_labeled, shap_values, mean_shap, feat_names
+        )
+        st.download_button(
+            label="🔍 Baixar Relatório SHAP em PDF",
+            data=pdf_shap_bytes,
+            file_name=f"relatorio_shap_{datetime.now().strftime('%Y%m%d')}.pdf",
+            mime="application/pdf",
+        )
+    except Exception as e:
+        st.error(f"Erro ao gerar PDF SHAP: {e}")
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # SEÇÃO 1 — Ranking
 # ═══════════════════════════════════════════════════════════════════════════════
